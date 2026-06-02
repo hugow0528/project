@@ -15,6 +15,8 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "localhub.db"
 DEFAULT_PORT = int(os.environ.get("PORT", "8000"))
 MAX_ROOM_CODE_ATTEMPTS = 20
+MAX_USERNAME_LENGTH = 40
+MAX_MESSAGE_LENGTH = 800
 
 app = Flask(__name__)
 
@@ -23,7 +25,7 @@ def get_local_ip() -> str:
     """Best-effort LAN IP detection without external network calls."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.connect(("192.168.0.1", 80))
+        sock.connect(("8.8.8.8", 80))
         return sock.getsockname()[0]
     except OSError:
         return "127.0.0.1"
@@ -66,7 +68,11 @@ def generate_room_code(length: int = 6) -> str:
 
 @app.get("/")
 def home():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        max_username_length=MAX_USERNAME_LENGTH,
+        max_message_length=MAX_MESSAGE_LENGTH,
+    )
 
 
 @app.get("/api/server-info")
@@ -144,8 +150,8 @@ def post_message(room_code: str):
     room_code = room_code.upper().strip()
     data = request.get_json(silent=True) or {}
 
-    username = str(data.get("username", "")).strip()[:40]
-    content = str(data.get("content", "")).strip()[:800]
+    username = str(data.get("username", "")).strip()[:MAX_USERNAME_LENGTH]
+    content = str(data.get("content", "")).strip()[:MAX_MESSAGE_LENGTH]
 
     if not username or not content:
         return jsonify({"error": "username and content are required."}), 400

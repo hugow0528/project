@@ -42,7 +42,7 @@
         <label>Room Code</label>
         <input id="roomCode" maxlength="6" placeholder="e.g. A1B2C3" />
         <label>Your Name</label>
-        <input id="username" maxlength="40" placeholder="e.g. Alice" />
+        <input id="username" maxlength="{{ max_username_length }}" placeholder="e.g. Alice" />
         <div class="row">
           <button id="joinBtn">Join</button>
           <button class="secondary" id="refreshBtn">Refresh</button>
@@ -54,7 +54,7 @@
       <h3>Room Messages</h3>
       <div id="messages" class="messages"></div>
       <label>Message</label>
-      <textarea id="messageInput" rows="3" maxlength="800" placeholder="Type a message..."></textarea>
+      <textarea id="messageInput" rows="3" maxlength="{{ max_message_length }}" placeholder="Type a message..."></textarea>
       <button id="sendBtn">Send</button>
     </div>
   </div>
@@ -71,10 +71,12 @@
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
+    const maxUsernameLength = Number({{ max_username_length|tojson }});
+    const maxMessageLength = Number({{ max_message_length|tojson }});
     let activeRoom = '';
 
     function esc(s) {
-      return s.replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+      return s.replace(/[&<>"'`]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;', '`':'&#96;' }[ch]));
     }
 
     async function loadServerInfo() {
@@ -126,8 +128,8 @@
 
     async function sendMessage() {
       const code = roomCode.value.trim().toUpperCase();
-      const user = username.value.trim();
-      const content = messageInput.value.trim();
+      const user = username.value.trim().slice(0, maxUsernameLength);
+      const content = messageInput.value.trim().slice(0, maxMessageLength);
       if (!code || !user || !content) {
         alert('Please fill room code, name, and message.');
         return;
@@ -150,12 +152,12 @@
     refreshBtn.addEventListener('click', refreshMessages);
     sendBtn.addEventListener('click', sendMessage);
 
-    let pollIntervalMs = 5000;
+    let pollIntervalMillis = 5000;
     async function pollMessages() {
       if (activeRoom && document.visibilityState === 'visible') {
         await refreshMessages();
       }
-      setTimeout(pollMessages, pollIntervalMs);
+      setTimeout(pollMessages, pollIntervalMillis);
     }
 
     loadServerInfo();
