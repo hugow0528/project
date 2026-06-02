@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LocalHub (Offline LAN Chat)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: Arial, sans-serif; margin: 0; background: #111; color: #eee; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 20px; }
+    .card { background: #1f1f1f; border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+    h1 { margin-top: 0; }
+    input, button, textarea { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 10px; border-radius: 8px; border: 1px solid #555; background: #181818; color: #fff; }
+    button { cursor: pointer; background: #2563eb; border-color: #1d4ed8; }
+    button.secondary { background: #374151; border-color: #4b5563; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .messages { max-height: 340px; overflow: auto; padding: 10px; border: 1px solid #444; border-radius: 8px; }
+    .msg { padding: 10px; border-bottom: 1px solid #333; }
+    .meta { font-size: 12px; color: #a0a0a0; }
+    .row { display: flex; gap: 10px; }
+    .row > button { width: auto; }
+    code { background: #222; padding: 2px 6px; border-radius: 6px; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>LocalHub</h1>
+    <p>Fully local LAN web app (no external API). Data is stored in local SQLite on this server.</p>
+
+    <div class="card" id="serverInfo">Loading server info...</div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Create Room</h3>
+        <button id="createRoomBtn">Create New Room</button>
+        <p id="createdRoom"></p>
+      </div>
+
+      <div class="card">
+        <h3>Join Room</h3>
+        <label>Room Code</label>
+        <input id="roomCode" maxlength="6" placeholder="e.g. A1B2C3" />
+        <label>Your Name</label>
+        <input id="username" maxlength="40" placeholder="e.g. Alice" />
+        <div class="row">
+          <button id="joinBtn">Join</button>
+          <button class="secondary" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Room Messages</h3>
+      <div id="messages" class="messages"></div>
+      <label>Message</label>
+      <textarea id="messageInput" rows="3" maxlength="800" placeholder="Type a message..."></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <script>
+    const serverInfo = document.getElementById('serverInfo');
+    const createRoomBtn = document.getElementById('createRoomBtn');
+    const createdRoom = document.getElementById('createdRoom');
+    const roomCode = document.getElementById('roomCode');
+    const username = document.getElementById('username');
+    const joinBtn = document.getElementById('joinBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const messages = document.getElementById('messages');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    let activeRoom = '';
+
+    function esc(s) {
+      return s.replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+    }
+
+    async function loadServerInfo() {
+      const res = await fetch('/api/server-info');
+      const info = await res.json();
+      serverInfo.innerHTML = `
+        <b>Server URLs:</b><br>
+        Local: <code>${esc(info.local_url)}</code><br>
+        Same Wi-Fi: <code>${esc(info.lan_url)}</code><br>
+        DB File: <code>${esc(info.storage)}</code>
+      `;
+    }
+
+    async function createRoom() {
+      const res = await fetch('/api/rooms', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || 'Failed to create room');
+      activeRoom = data.room_code;
+      roomCode.value = activeRoom;
+      createdRoom.innerHTML = `Room created: <code>${esc(activeRoom)}</code>`;
+      await refreshMessages();
+    }
+
+    async function refreshMessages() {
+      const code = roomCode.value.trim().toUpperCase();
+      if (!code) return;
+      activeRoom = code;
+
+      const res = await fetch(`/api/rooms/${encodeURIComponent(code)}/messages`);
+      const data = await res.json();
+      if (!res.ok) {
+        messages.innerHTML = `<div class="msg">${esc(data.error || 'Room error')}</div>`;
+        return;
+      }
+
+      if (!data.messages.length) {
+        messages.innerHTML = '<div class="msg">No messages yet.</div>';
+        return;
+      }
+
+      messages.innerHTML = data.messages.map(m => `
+        <div class="msg">
+          <div><b>${esc(m.username)}</b>: ${esc(m.content)}</div>
+          <div class="meta">${esc(m.created_at)}</div>
+        </div>
+      `).join('');
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const code = roomCode.value.trim().toUpperCase();
+      const user = username.value.trim();
+      const content = messageInput.value.trim();
+      if (!code || !user || !content) {
+        alert('Please fill room code, name, and message.');
+        return;
+      }
+
+      const res = await fetch(`/api/rooms/${encodeURIComponent(code)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, content })
+      });
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || 'Failed to send');
+
+      messageInput.value = '';
+      await refreshMessages();
+    }
+
+    createRoomBtn.addEventListener('click', createRoom);
+    joinBtn.addEventListener('click', refreshMessages);
+    refreshBtn.addEventListener('click', refreshMessages);
+    sendBtn.addEventListener('click', sendMessage);
+
+    setInterval(() => { if (activeRoom) refreshMessages(); }, 5000);
+    loadServerInfo();
+  </script>
+</body>
+</html>
