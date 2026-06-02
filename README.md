@@ -9,10 +9,10 @@ A fully local Python web app that stores all data on the local server using SQLi
 
 ## Files
 
-- `/tmp/workspace/hugow0528/project/app.py` - Python server (Flask + SQLite)
-- `/tmp/workspace/hugow0528/project/templates/index.html` - Web UI
-- `/tmp/workspace/hugow0528/project/requirements.txt` - Python dependencies
-- `/tmp/workspace/hugow0528/project/start_localhost.bat` - Auto install + host launcher
+- `app.py` - Python server (Flask + SQLite)
+- `templates/index.html` - Web UI
+- `requirements.txt` - Python dependencies
+- `start_localhost.bat` - Auto install + host launcher
 
 ## Setup (Windows, USB portable)
 
