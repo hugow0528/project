@@ -44,3 +44,5 @@ If other devices cannot connect, allow Python through Windows Firewall and verif
 
 - Data is stored in `data/localhub.db` on the host machine.
 - To clear data, stop server and delete `data/localhub.db`.
+- Optional: set `PORT` before startup if you need a port other than `8000`.
+- XSS protection is layered: Jinja2 autoescaping on server-side templates plus client-side escaping before DOM insertion.

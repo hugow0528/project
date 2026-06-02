@@ -7,6 +7,12 @@ cd /d "%~dp0"
 if not exist ".venv" (
     echo [1/4] Creating virtual environment...
     py -3 -m venv .venv
+    if errorlevel 1 (
+        echo Failed to create virtual environment with "py -3".
+        echo Please install Python 3 and ensure "py" launcher is available.
+        pause
+        exit /b 1
+    )
 )
 
 echo [2/4] Activating virtual environment...

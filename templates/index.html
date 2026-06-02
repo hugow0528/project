@@ -152,12 +152,12 @@
     refreshBtn.addEventListener('click', refreshMessages);
     sendBtn.addEventListener('click', sendMessage);
 
-    let pollIntervalMillis = 5000;
+    const pollInterval = 5000; // milliseconds
     async function pollMessages() {
       if (activeRoom && document.visibilityState === 'visible') {
         await refreshMessages();
       }
-      setTimeout(pollMessages, pollIntervalMillis);
+      setTimeout(pollMessages, pollInterval);
     }
 
     loadServerInfo();
