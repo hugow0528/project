@@ -18,12 +18,8 @@ pip install -r requirements.txt
 
 echo [4/4] Starting local server...
 set PORT=8000
-for /f "tokens=2 delims=:" %%f in ('ipconfig ^| findstr /R /C:"IPv4 Address"') do (
-    set LAN_IP=%%f
-    goto :got_ip
-)
-:got_ip
-set LAN_IP=%LAN_IP: =%
+for /f %%i in ('python -c "import socket; print(socket.gethostbyname(socket.gethostname()))"') do set LAN_IP=%%i
+if not defined LAN_IP set LAN_IP=127.0.0.1
 
 echo.
 echo Local URL: http://127.0.0.1:%PORT%

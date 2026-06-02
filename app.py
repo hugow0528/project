@@ -170,8 +170,10 @@ def post_message(room_code: str):
 if __name__ == "__main__":
     init_db()
     lan_ip = get_local_ip()
-    print("\\nLocalHub server is starting...")
+    print()
+    print("LocalHub server is starting...")
     print(f"Local URL: http://127.0.0.1:{DEFAULT_PORT}")
     print(f"LAN URL:   http://{lan_ip}:{DEFAULT_PORT}")
-    print(f"SQLite DB: {DB_PATH}\\n")
+    print(f"SQLite DB: {DB_PATH}")
+    print()
     app.run(host="0.0.0.0", port=DEFAULT_PORT)
