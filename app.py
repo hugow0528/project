@@ -14,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "localhub.db"
 DEFAULT_PORT = int(os.environ.get("PORT", "8000"))
+MAX_ROOM_CODE_ATTEMPTS = 20
 
 app = Flask(__name__)
 
@@ -88,7 +89,7 @@ def server_info():
 def create_room():
     code = None
     with db_conn() as conn:
-        for _ in range(20):
+        for _ in range(MAX_ROOM_CODE_ATTEMPTS):
             candidate = generate_room_code()
             exists = conn.execute("SELECT 1 FROM rooms WHERE code = ?", (candidate,)).fetchone()
             if not exists:

@@ -150,8 +150,16 @@
     refreshBtn.addEventListener('click', refreshMessages);
     sendBtn.addEventListener('click', sendMessage);
 
-    setInterval(() => { if (activeRoom) refreshMessages(); }, 5000);
+    let pollMs = 5000;
+    async function pollMessages() {
+      if (activeRoom && document.visibilityState === 'visible') {
+        await refreshMessages();
+      }
+      setTimeout(pollMessages, pollMs);
+    }
+
     loadServerInfo();
+    pollMessages();
   </script>
 </body>
 </html>
