@@ -12,8 +12,9 @@ from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PORT = int(os.environ.get("PORT", "8000"))
-ROOM_TTL_SECONDS = 6 * 60 * 60
+ROOM_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 ROOM_CODE_LENGTH = 6
+MAX_ROOM_GENERATION_ATTEMPTS = 40
 
 app = Flask(__name__)
 
@@ -97,7 +98,7 @@ def create_room():
     cleanup_expired_rooms()
     with rooms_lock:
         code = None
-        for _ in range(40):
+        for _ in range(MAX_ROOM_GENERATION_ATTEMPTS):
             candidate = generate_room_code()
             if candidate not in rooms:
                 code = candidate

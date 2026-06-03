@@ -172,7 +172,12 @@
       candidatesIndex = 0;
       answerApplied = false;
 
-      localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      try {
+        localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      } catch (err) {
+        setStatus(`Screen capture denied/failed: ${err.message}`);
+        return;
+      }
       presenterPreview.srcObject = localStream;
 
       pc = makePeer('presenter');
@@ -243,7 +248,9 @@
           for (const c of candResp.candidates) {
             try {
               await pc.addIceCandidate(new RTCIceCandidate(c));
-            } catch (_) {}
+            } catch (err) {
+              setStatus(`ICE apply warning: ${err.message}`);
+            }
           }
         } catch (err) {
           setStatus(`Poll error: ${err.message}`);
