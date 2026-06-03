@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Local ScreenShare</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f1115; color: #eef2ff; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 20px; }
+    .card { border: 1px solid #2c3240; background: #171b22; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+    .hidden { display: none; }
+    h1, h2, h3 { margin-top: 0; }
+    .btn { border: 1px solid #374151; border-radius: 8px; padding: 10px 14px; cursor: pointer; color: #fff; background: #1d4ed8; }
+    .btn.secondary { background: #374151; }
+    .btn.danger { background: #991b1b; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #374151; border-radius: 8px; padding: 10px; background: #0f1319; color: #fff; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row .btn { width: auto; }
+    video { width: 100%; background: #000; border-radius: 8px; border: 1px solid #2a2f3a; }
+    .code { font-size: 28px; letter-spacing: 4px; font-weight: 700; color: #93c5fd; }
+    .mono { font-family: Consolas, Menlo, monospace; }
+    #status { white-space: pre-wrap; font-size: 13px; color: #9ca3af; min-height: 40px; }
+    .small { font-size: 13px; color: #aab2c5; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Local ScreenShare</h1>
+    <div class="card small" id="serverInfo">Loading server info...</div>
+
+    <div id="homeView" class="card">
+      <h3>Choose Role</h3>
+      <div class="row">
+        <button class="btn" id="openPresenterBtn">Start Presenting</button>
+        <button class="btn secondary" id="openViewerBtn">Join Session</button>
+      </div>
+    </div>
+
+    <div id="presenterView" class="hidden">
+      <div class="card">
+        <h2>Presenter</h2>
+        <div>Room Code</div>
+        <div class="code mono" id="roomCode">------</div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" id="createRoomBtn">Create Room</button>
+          <button class="btn" id="startShareBtn">Start Screen Share</button>
+          <button class="btn danger" id="stopShareBtn">Stop</button>
+          <button class="btn secondary" id="backFromPresenterBtn">Back</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Local Preview</h3>
+        <video id="presenterPreview" autoplay muted playsinline></video>
+      </div>
+    </div>
+
+    <div id="viewerView" class="hidden">
+      <div class="card">
+        <h2>Viewer</h2>
+        <label>Room Code</label>
+        <input id="joinCode" maxlength="6" placeholder="Enter room code" />
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" id="joinBtn">Join</button>
+          <button class="btn secondary" id="backFromViewerBtn">Back</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Remote Screen</h3>
+        <video id="viewerVideo" autoplay playsinline controls></video>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Status</h3>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <script>
+    const serverInfo = document.getElementById('serverInfo');
+    const statusEl = document.getElementById('status');
+    const homeView = document.getElementById('homeView');
+    const presenterView = document.getElementById('presenterView');
+    const viewerView = document.getElementById('viewerView');
+
+    const roomCodeEl = document.getElementById('roomCode');
+    const presenterPreview = document.getElementById('presenterPreview');
+    const viewerVideo = document.getElementById('viewerVideo');
+    const joinCodeInput = document.getElementById('joinCode');
+
+    let role = null;
+    let roomCode = null;
+    let pc = null;
+    let localStream = null;
+    let candidatesIndex = 0;
+    let offerApplied = false;
+    let answerApplied = false;
+    let pollingTimer = null;
+
+    function setStatus(msg) {
+      const t = new Date().toLocaleTimeString();
+      statusEl.textContent = `[${t}] ${msg}\n` + statusEl.textContent;
+    }
+
+    function show(view) {
+      homeView.classList.add('hidden');
+      presenterView.classList.add('hidden');
+      viewerView.classList.add('hidden');
+      view.classList.remove('hidden');
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    function stopCurrentPeer() {
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+        pollingTimer = null;
+      }
+      if (pc) {
+        try { pc.close(); } catch (_) {}
+        pc = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      presenterPreview.srcObject = null;
+    }
+
+    function makePeer(currentRole) {
+      const conn = new RTCPeerConnection({ iceServers: [] });
+      conn.onicecandidate = async (event) => {
+        if (!event.candidate || !roomCode) return;
+        try {
+          await api(`/api/share/${encodeURIComponent(roomCode)}/candidate`, {
+            method: 'POST',
+            body: JSON.stringify({ role: currentRole, candidate: event.candidate.toJSON() })
+          });
+        } catch (err) {
+          setStatus(`Candidate post failed: ${err.message}`);
+        }
+      };
+      conn.onconnectionstatechange = () => setStatus(`Connection state: ${conn.connectionState}`);
+      return conn;
+    }
+
+    async function createRoom() {
+      const data = await api('/api/share/rooms', { method: 'POST' });
+      roomCode = data.room_code;
+      roomCodeEl.textContent = roomCode;
+      joinCodeInput.value = roomCode;
+      candidatesIndex = 0;
+      offerApplied = false;
+      answerApplied = false;
+      setStatus(`Room created: ${roomCode}`);
+    }
+
+    async function startPresenter() {
+      if (!roomCode) {
+        setStatus('Please create room first.');
+        return;
+      }
+      stopCurrentPeer();
+      candidatesIndex = 0;
+      answerApplied = false;
+
+      try {
+        localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      } catch (err) {
+        setStatus(`Screen capture denied/failed: ${err.message}`);
+        return;
+      }
+      presenterPreview.srcObject = localStream;
+
+      pc = makePeer('presenter');
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await api(`/api/share/${encodeURIComponent(roomCode)}/offer`, {
+        method: 'POST',
+        body: JSON.stringify(pc.localDescription.toJSON())
+      });
+
+      setStatus('Offer sent. Waiting for viewer...');
+      startPolling();
+    }
+
+    async function joinViewer() {
+      const code = joinCodeInput.value.trim().toUpperCase();
+      if (!code) return setStatus('Enter room code first.');
+      roomCode = code;
+      stopCurrentPeer();
+
+      candidatesIndex = 0;
+      offerApplied = false;
+      answerApplied = true;
+
+      pc = makePeer('viewer');
+      pc.ontrack = (event) => {
+        viewerVideo.srcObject = event.streams[0];
+      };
+
+      setStatus(`Joining room ${roomCode}...`);
+      startPolling();
+    }
+
+    async function startPolling() {
+      if (pollingTimer) clearInterval(pollingTimer);
+      pollingTimer = setInterval(async () => {
+        if (!pc || !roomCode) return;
+        try {
+          if (role === 'presenter' && !answerApplied) {
+            const { answer } = await api(`/api/share/${encodeURIComponent(roomCode)}/answer`);
+            if (answer && answer.sdp) {
+              await pc.setRemoteDescription(new RTCSessionDescription(answer));
+              answerApplied = true;
+              setStatus('Viewer answer received. Streaming now.');
+            }
+          }
+
+          if (role === 'viewer' && !offerApplied) {
+            const { offer } = await api(`/api/share/${encodeURIComponent(roomCode)}/offer`);
+            if (offer && offer.sdp) {
+              await pc.setRemoteDescription(new RTCSessionDescription(offer));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await api(`/api/share/${encodeURIComponent(roomCode)}/answer`, {
+                method: 'POST',
+                body: JSON.stringify(pc.localDescription.toJSON())
+              });
+              offerApplied = true;
+              setStatus('Connected to presenter.');
+            }
+          }
+
+          const receiver = role === 'presenter' ? 'presenter' : 'viewer';
+          const candResp = await api(`/api/share/${encodeURIComponent(roomCode)}/candidates?for=${receiver}&after=${candidatesIndex}`);
+          candidatesIndex = candResp.next_index;
+          for (const c of candResp.candidates) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(c));
+            } catch (err) {
+              setStatus(`ICE apply warning: ${err.message}`);
+            }
+          }
+        } catch (err) {
+          setStatus(`Poll error: ${err.message}`);
+        }
+      }, 1000);
+    }
+
+    async function loadServerInfo() {
+      const info = await api('/api/server-info');
+      serverInfo.innerHTML = `Local URL: <b>${info.local_url}</b><br>Same Wi-Fi URL: <b>${info.lan_url}</b><br>No external API: <b>Yes</b>`;
+    }
+
+    document.getElementById('openPresenterBtn').onclick = () => {
+      role = 'presenter';
+      stopCurrentPeer();
+      show(presenterView);
+      setStatus('Presenter mode ready.');
+    };
+
+    document.getElementById('openViewerBtn').onclick = () => {
+      role = 'viewer';
+      stopCurrentPeer();
+      show(viewerView);
+      setStatus('Viewer mode ready.');
+    };
+
+    document.getElementById('backFromPresenterBtn').onclick = () => {
+      stopCurrentPeer();
+      roomCode = null;
+      roomCodeEl.textContent = '------';
+      show(homeView);
+    };
+
+    document.getElementById('backFromViewerBtn').onclick = () => {
+      stopCurrentPeer();
+      roomCode = null;
+      show(homeView);
+    };
+
+    document.getElementById('createRoomBtn').onclick = async () => {
+      try { await createRoom(); } catch (err) { setStatus(err.message); }
+    };
+
+    document.getElementById('startShareBtn').onclick = async () => {
+      try { await startPresenter(); } catch (err) { setStatus(`Start share failed: ${err.message}`); }
+    };
+
+    document.getElementById('joinBtn').onclick = async () => {
+      try { await joinViewer(); } catch (err) { setStatus(`Join failed: ${err.message}`); }
+    };
+
+    document.getElementById('stopShareBtn').onclick = () => {
+      stopCurrentPeer();
+      setStatus('Sharing stopped.');
+    };
+
+    loadServerInfo().catch(err => setStatus(err.message));
+  </script>
+</body>
+</html>
