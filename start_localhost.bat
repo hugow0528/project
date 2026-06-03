@@ -4,12 +4,27 @@ setlocal EnableDelayedExpansion
 REM Portable launcher: run from USB folder root.
 cd /d "%~dp0"
 
+set "PYTHON_CMD="
+where py >nul 2>nul
+if %errorlevel%==0 set "PYTHON_CMD=py -3"
+
+if not defined PYTHON_CMD (
+    where python >nul 2>nul
+    if %errorlevel%==0 set "PYTHON_CMD=python"
+)
+
+if not defined PYTHON_CMD (
+    echo Python 3 was not found.
+    echo Please install Python 3 and enable PATH (or py launcher).
+    pause
+    exit /b 1
+)
+
 if not exist ".venv" (
     echo [1/4] Creating virtual environment...
-    py -3 -m venv .venv
+    %PYTHON_CMD% -m venv .venv
     if errorlevel 1 (
-        echo Failed to create virtual environment with "py -3".
-        echo Please install Python 3 and ensure "py" launcher is available.
+        echo Failed to create virtual environment.
         pause
         exit /b 1
     )
@@ -23,7 +38,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 echo [4/4] Starting local server...
-set PORT=8000
+if not defined PORT set PORT=8000
 
 echo.
 echo Local URL: http://127.0.0.1:%PORT%

@@ -1,48 +1,47 @@
-# LocalHub (USB-Portable Localhost Web App)
+# Local ScreenShare (USB-Portable)
 
-A fully local Python web app that stores all data on the local server using SQLite.
+A fully local Python screen-sharing web app.
 
 - No external API calls
-- Local database only (`/data/localhub.db`)
-- Usable on same Wi-Fi (`http://<your-lan-ip>:8000`)
-- Includes `start_localhost.bat` for one-click Windows setup and run
+- Same-WiFi access supported
+- Portable folder usage (USB friendly)
+- Auto install + launch with `start_localhost.bat`
 
-## Files
+## Project files
 
-- `app.py` - Python server (Flask + SQLite)
-- `templates/index.html` - Web UI
-- `requirements.txt` - Python dependencies
-- `start_localhost.bat` - Auto install + host launcher
+- `app.py` - Flask server and local signaling endpoints
+- `templates/index.html` - screen-share UI (presenter/viewer)
+- `requirements.txt` - dependencies
+- `start_localhost.bat` - Windows auto setup and launch
 
-## Setup (Windows, USB portable)
+## Setup (Windows)
 
-1. Copy the project folder to a USB drive (or any folder).
-2. On target PC, install Python 3.10+ (with `py` launcher enabled).
+1. Put the folder anywhere, e.g. `D:\sharescreen`.
+2. Ensure Python 3 is installed (either `py` launcher or `python` in PATH).
 3. Double-click `start_localhost.bat`.
-4. Script will:
-   - create `.venv`
-   - install libraries from `requirements.txt`
-   - start the website
-   - show Local URL and same-Wi-Fi URL
-5. Keep terminal open while hosting.
+4. Keep terminal open while hosting.
 
-## Access from same Wi-Fi
+## Usage
 
-- Host computer: `http://127.0.0.1:8000`
-- Other devices on same Wi-Fi: `http://<host-ip>:8000`
+1. Host clicks **Start Presenting**.
+2. Click **Create Room**.
+3. Click **Start Screen Share** and allow browser screen capture.
+4. Viewer on same Wi-Fi opens host URL, chooses **Join Session**, enters room code.
 
-If other devices cannot connect, allow Python through Windows Firewall and verify both devices are in the same subnet.
+## URLs
 
-## App usage
+- Local: `http://127.0.0.1:<PORT>`
+- Same Wi-Fi: `http://<host-lan-ip>:<PORT>`
 
-1. Click **Create New Room** to generate a room code.
-2. Share room code with users in same Wi-Fi.
-3. Users enter room code + name and click **Join**.
-4. Send messages; all are saved to local SQLite.
+Default port is `8000`. If `8000` is busy, run with another port:
+
+```bat
+set PORT=8001
+python app.py
+```
 
 ## Notes
 
-- Data is stored in `data/localhub.db` on the host machine.
-- To clear data, stop server and delete `data/localhub.db`.
-- Optional: set `PORT` before startup if you need a port other than `8000`.
-- XSS protection is layered: Jinja2 autoescaping on server-side templates plus client-side escaping before DOM insertion.
+- Signaling data is stored in local server memory only.
+- No third-party cloud signaling is used.
+- For LAN access, allow Python through Windows Firewall if prompted.

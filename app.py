@@ -3,26 +3,25 @@ from __future__ import annotations
 import os
 import random
 import socket
-import sqlite3
 import string
-from datetime import datetime, timezone
+import threading
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "localhub.db"
 DEFAULT_PORT = int(os.environ.get("PORT", "8000"))
-MAX_ROOM_CODE_ATTEMPTS = 20
-MAX_USERNAME_LENGTH = 40
-MAX_MESSAGE_LENGTH = 800
+ROOM_TTL_SECONDS = 6 * 60 * 60
+ROOM_CODE_LENGTH = 6
 
 app = Flask(__name__)
 
+rooms_lock = threading.Lock()
+rooms: dict[str, dict] = {}
+
 
 def get_local_ip() -> str:
-    """Best-effort LAN IP detection without external network calls."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("8.8.8.8", 80))
@@ -33,46 +32,49 @@ def get_local_ip() -> str:
         sock.close()
 
 
-def db_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def now_ts() -> float:
+    return time.time()
 
 
-def init_db() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with db_conn() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS rooms (
-                code TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                room_code TEXT NOT NULL,
-                username TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (room_code) REFERENCES rooms(code) ON DELETE CASCADE
-            );
-            """
-        )
-
-
-def generate_room_code(length: int = 6) -> str:
+def generate_room_code() -> str:
     alphabet = string.ascii_uppercase + string.digits
-    return "".join(random.choice(alphabet) for _ in range(length))
+    return "".join(random.choice(alphabet) for _ in range(ROOM_CODE_LENGTH))
+
+
+def cleanup_expired_rooms() -> None:
+    cutoff = now_ts() - ROOM_TTL_SECONDS
+    with rooms_lock:
+        expired = [code for code, room in rooms.items() if room["updated_at"] < cutoff]
+        for code in expired:
+            del rooms[code]
+
+
+def create_room_state() -> dict:
+    ts = now_ts()
+    return {
+        "created_at": ts,
+        "updated_at": ts,
+        "offer": None,
+        "answer": None,
+        "presenter_candidates": [],
+        "viewer_candidates": [],
+    }
+
+
+def get_room_or_404(room_code: str):
+    room_code = room_code.upper().strip()
+    with rooms_lock:
+        room = rooms.get(room_code)
+        if room:
+            room["updated_at"] = now_ts()
+    if not room:
+        return None, (jsonify({"error": "Room not found."}), 404)
+    return room, None
 
 
 @app.get("/")
 def home():
-    return render_template(
-        "index.html",
-        max_username_length=MAX_USERNAME_LENGTH,
-        max_message_length=MAX_MESSAGE_LENGTH,
-    )
+    return render_template("index.html")
 
 
 @app.get("/api/server-info")
@@ -86,100 +88,139 @@ def server_info():
             "port": port,
             "local_url": f"http://127.0.0.1:{port}",
             "lan_url": f"http://{local_ip}:{port}",
-            "storage": str(DB_PATH),
         }
     )
 
 
-@app.post("/api/rooms")
+@app.post("/api/share/rooms")
 def create_room():
-    code = None
-    with db_conn() as conn:
-        for _ in range(MAX_ROOM_CODE_ATTEMPTS):
+    cleanup_expired_rooms()
+    with rooms_lock:
+        code = None
+        for _ in range(40):
             candidate = generate_room_code()
-            exists = conn.execute("SELECT 1 FROM rooms WHERE code = ?", (candidate,)).fetchone()
-            if not exists:
+            if candidate not in rooms:
                 code = candidate
                 break
-
         if not code:
-            return jsonify({"error": "Could not generate a unique room code."}), 500
-
-        created_at = datetime.now(timezone.utc).isoformat()
-        conn.execute("INSERT INTO rooms (code, created_at) VALUES (?, ?)", (code, created_at))
-        conn.commit()
-
+            return jsonify({"error": "Could not allocate room."}), 500
+        rooms[code] = create_room_state()
     return jsonify({"room_code": code}), 201
 
 
-@app.get("/api/rooms/<room_code>/messages")
-def get_messages(room_code: str):
-    room_code = room_code.upper().strip()
-    with db_conn() as conn:
-        room = conn.execute("SELECT code FROM rooms WHERE code = ?", (room_code,)).fetchone()
-        if not room:
-            return jsonify({"error": "Room not found."}), 404
-
-        rows = conn.execute(
-            """
-            SELECT username, content, created_at
-            FROM messages
-            WHERE room_code = ?
-            ORDER BY id ASC
-            """,
-            (room_code,),
-        ).fetchall()
-
-    return jsonify(
-        {
-            "room_code": room_code,
-            "messages": [
-                {
-                    "username": row["username"],
-                    "content": row["content"],
-                    "created_at": row["created_at"],
-                }
-                for row in rows
-            ],
-        }
-    )
+@app.post("/api/share/<room_code>/reset")
+def reset_room(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+    with rooms_lock:
+        room["offer"] = None
+        room["answer"] = None
+        room["presenter_candidates"] = []
+        room["viewer_candidates"] = []
+        room["updated_at"] = now_ts()
+    return jsonify({"ok": True})
 
 
-@app.post("/api/rooms/<room_code>/messages")
-def post_message(room_code: str):
-    room_code = room_code.upper().strip()
-    data = request.get_json(silent=True) or {}
+@app.post("/api/share/<room_code>/offer")
+def post_offer(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+    payload = request.get_json(silent=True) or {}
+    sdp = payload.get("sdp")
+    sdp_type = payload.get("type")
+    if not sdp or sdp_type != "offer":
+        return jsonify({"error": "Invalid offer payload."}), 400
 
-    username = str(data.get("username", "")).strip()[:MAX_USERNAME_LENGTH]
-    content = str(data.get("content", "")).strip()[:MAX_MESSAGE_LENGTH]
+    with rooms_lock:
+        room["offer"] = {"type": "offer", "sdp": sdp}
+        room["answer"] = None
+        room["presenter_candidates"] = []
+        room["viewer_candidates"] = []
+        room["updated_at"] = now_ts()
+    return jsonify({"ok": True})
 
-    if not username or not content:
-        return jsonify({"error": "username and content are required."}), 400
 
-    with db_conn() as conn:
-        room = conn.execute("SELECT code FROM rooms WHERE code = ?", (room_code,)).fetchone()
-        if not room:
-            return jsonify({"error": "Room not found."}), 404
+@app.get("/api/share/<room_code>/offer")
+def get_offer(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+    return jsonify({"offer": room["offer"]})
 
-        conn.execute(
-            """
-            INSERT INTO messages (room_code, username, content, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (room_code, username, content, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
 
-    return jsonify({"ok": True}), 201
+@app.post("/api/share/<room_code>/answer")
+def post_answer(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+    payload = request.get_json(silent=True) or {}
+    sdp = payload.get("sdp")
+    sdp_type = payload.get("type")
+    if not sdp or sdp_type != "answer":
+        return jsonify({"error": "Invalid answer payload."}), 400
+
+    with rooms_lock:
+        room["answer"] = {"type": "answer", "sdp": sdp}
+        room["updated_at"] = now_ts()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/share/<room_code>/answer")
+def get_answer(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+    return jsonify({"answer": room["answer"]})
+
+
+@app.post("/api/share/<room_code>/candidate")
+def post_candidate(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    role = str(payload.get("role", "")).strip().lower()
+    candidate = payload.get("candidate")
+    if role not in {"presenter", "viewer"} or not isinstance(candidate, dict):
+        return jsonify({"error": "Invalid candidate payload."}), 400
+
+    with rooms_lock:
+        if role == "presenter":
+            room["presenter_candidates"].append(candidate)
+        else:
+            room["viewer_candidates"].append(candidate)
+        room["updated_at"] = now_ts()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/share/<room_code>/candidates")
+def get_candidates(room_code: str):
+    room, err = get_room_or_404(room_code)
+    if err:
+        return err
+
+    receiver = str(request.args.get("for", "")).strip().lower()
+    after = request.args.get("after", "0")
+    if receiver not in {"presenter", "viewer"}:
+        return jsonify({"error": "Query parameter 'for' must be presenter or viewer."}), 400
+    try:
+        idx = max(int(after), 0)
+    except ValueError:
+        return jsonify({"error": "Query parameter 'after' must be an integer."}), 400
+
+    source = room["viewer_candidates"] if receiver == "presenter" else room["presenter_candidates"]
+    sliced = source[idx:]
+    return jsonify({"candidates": sliced, "next_index": len(source)})
 
 
 if __name__ == "__main__":
-    init_db()
     lan_ip = get_local_ip()
     print()
-    print("LocalHub server is starting...")
+    print("Local ScreenShare server is starting...")
     print(f"Local URL: http://127.0.0.1:{DEFAULT_PORT}")
     print(f"LAN URL:   http://{lan_ip}:{DEFAULT_PORT}")
-    print(f"SQLite DB: {DB_PATH}")
     print()
     app.run(host="0.0.0.0", port=DEFAULT_PORT)
